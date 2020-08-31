@@ -12,33 +12,34 @@
 #include "font.h"
 #include "tiles.h"
 
-// SETTINGS AND CONFIGURATION
-#define WINDOW_TITLE "Tetris"
-
-#define WINDOW_HEIGHT 1000 //720
-
-#define MAX_FPS (1000 / 60)
-
 // PLAY GRID DIMENSIONS
 #define WIDTH 10
 #define HEIGHT 20
-#define TETROMINO_WIDTH 4
 
 // PUSH THE PLAY GRID AROUND FOR RENDERING
 #define LEFT_OFFSET 1
-#define TOP_OFFSET 2
+#define TOP_OFFSET 4
+
+// DISPLAY SETTINGS
+#define WINDOW_TITLE "Tetris"
+#define WINDOW_HEIGHT 720
+
+#define MAX_FPS (1000 / 60)
 
 // LOGICAL SIZE OF A TETRIS SQUARE
-#define SQUARE_DIM (WINDOW_HEIGHT / (HEIGHT + 1 + TOP_OFFSET))
-
-#define WINDOW_WIDTH (SQUARE_DIM * (WIDTH + 2))
+#define SQUARE_DIM (WINDOW_HEIGHT / ((HEIGHT + 1) + TOP_OFFSET))
+#define WINDOW_WIDTH (SQUARE_DIM * (WIDTH + (LEFT_OFFSET * 2)))
 
 // NUMBER OF CHARACTERS PER TETROMINO
+#define TETROMINO_WIDTH 4
 #define TETROMINO_SIZE 16
 
-// INITIAL MOVEMENT MODIFIERS
+// GAMEPLAY MODIFIERS
 #define MOVE_DELAY 1000
 #define MIN_MOVE_DELAY 50
+#define ROTATION_DELAY 150
+#define DIFFICULTY_RATIO 0.2
+#define SCORE_LEVEL_RATIO 500 // 1000
 
 // STRUCTURE AND DATA DEFINITIONS
 typedef enum TETROMINO
@@ -66,6 +67,7 @@ typedef enum GAME_STATUS
 {
     MENU,
     PLAYING,
+    PAUSED,
     GAME_OVER,
     CLOSING,
 } GAME_STATUS;
@@ -82,18 +84,20 @@ typedef struct TETRIS_STATE
     // Timing
     uint32_t last_frame;
     uint32_t last_move;
+    // Score
+    uint16_t score;
     // Board
     char board[(WIDTH * HEIGHT) * 2];
-    uint16_t score;
+    // Current piece
     TETROMINO tetromino_type;
     int tetromino_x;
     int tetromino_y;
     ROTATION tetromino_rotation;
-    // Score
-
+    // Next piece
+    TETROMINO next_tetromino_type;
 } TETRIS_STATE;
 
-// GLOBAL RESOURCES
+// STATIC RESOURCES
 const char *tetromino[NUM_TETROMINO] = {
     "..I."
     "..I."
@@ -126,19 +130,20 @@ const char *tetromino[NUM_TETROMINO] = {
 };
 
 // HELPER FUNCTIONS
-static int tetromino_translate_rotation(int x, int y, ROTATION rotation)
+static int tetromino_translate_rotation(int x, int y, TETROMINO t, ROTATION rotation)
 {
+    // Disable O rotation.
+    if (t == O)
+        return y * TETROMINO_WIDTH + x;
+
     switch (rotation % ROTATIONS)
     {
     case DEG_0:
         return y * TETROMINO_WIDTH + x;
-
     case DEG_90:
         return 12 + y - (x * TETROMINO_WIDTH);
-
     case DEG_180:
         return 15 - (y * TETROMINO_WIDTH) - x;
-
     case DEG_270:
         return 3 - y + (x * TETROMINO_WIDTH);
     }
@@ -157,6 +162,7 @@ static int tetromino_has_space(TETRIS_STATE *tetris, int x, int y)
         int rotatedIndex =
             tetromino_translate_rotation(i % TETROMINO_WIDTH,
                                          i / TETROMINO_WIDTH,
+                                         tetris->tetromino_type,
                                          tetris->tetromino_rotation);
 
         // Add the indexes to the top left corner to get the actual position
@@ -166,6 +172,10 @@ static int tetromino_has_space(TETRIS_STATE *tetris, int x, int y)
         // Check the x axis bounds
         if (real_x < 0 || real_x > WIDTH - 1)
             return 1;
+
+        // Off the screen, cannot be a game over
+        if (real_y < 0)
+            continue;
 
         // Check if we have hit the bottom
         if (real_y >= HEIGHT)
@@ -190,7 +200,7 @@ static void tetromino_init(TETRIS_STATE *tetris)
 {
     tetris->tetromino_type = rand() % NUM_TETROMINO;
     tetris->tetromino_x = (WIDTH / 2) - (TETROMINO_WIDTH / 2);
-    tetris->tetromino_y = 0;
+    tetris->tetromino_y = -TETROMINO_WIDTH;
     tetris->tetromino_rotation = DEG_0;
 }
 
@@ -208,12 +218,11 @@ static void tetromino_write(TETRIS_STATE *tetris)
 
         // Get the rotated index
         int true_index =
-            tetromino_translate_rotation(sub_x, sub_y,
+            tetromino_translate_rotation(sub_x, sub_y, tetris->tetromino_type,
                                          tetris->tetromino_rotation);
 
         int true_x = true_index % TETROMINO_WIDTH;
         int true_y = true_index / TETROMINO_WIDTH;
-        // printf("%d |rotation %d| %d\n", i, tetris->tetromino_rotation, true_index);
 
         // Write to the board
         // Index translation.
@@ -225,6 +234,16 @@ static void tetromino_write(TETRIS_STATE *tetris)
 }
 
 // RENDER FUNCTIONS
+static SDL_Rect transform_coords(int x, int y)
+{
+    return (SDL_Rect){
+        .x = (x + LEFT_OFFSET) * SQUARE_DIM,
+        .y = WINDOW_HEIGHT - (HEIGHT - y + 1) * SQUARE_DIM,
+        .w = SQUARE_DIM,
+        .h = SQUARE_DIM,
+    };
+}
+
 static void draw_rect(SDL_Renderer *renderer, SDL_Rect pos, SDL_Color colour,
                       bool fill)
 {
@@ -240,12 +259,7 @@ static void draw_rect(SDL_Renderer *renderer, SDL_Rect pos, SDL_Color colour,
 static void draw_tile(SDL_Renderer *renderer, SDL_Texture *tex, int x, int y,
                       int index)
 {
-    SDL_Rect dst_rect = {
-        .x = (x + LEFT_OFFSET) * SQUARE_DIM,
-        .y = (y + TOP_OFFSET) * SQUARE_DIM,
-        .w = SQUARE_DIM,
-        .h = SQUARE_DIM,
-    };
+    SDL_Rect dst_rect = transform_coords(x, y);
     SDL_Rect src_rect = {index * 32, 0, 32, 32};
     SDL_RenderCopy(renderer, tex, &src_rect, &dst_rect);
 }
@@ -275,7 +289,6 @@ static void tetromino_clear_row(TETRIS_STATE *tetris)
     int cleared_rows[HEIGHT] = {0};
     int cleared = 0;
     for (int row = 0; row < HEIGHT; row++)
-    {
         for (int col = 0; col < WIDTH; col++)
         {
             if (tetris->board[(row * WIDTH) + col] == '.')
@@ -286,11 +299,12 @@ static void tetromino_clear_row(TETRIS_STATE *tetris)
                 cleared++;
             }
         }
-    }
+
+    // No rows cleared.
     if (!cleared)
         return;
 
-    // Animate the row destruction.
+    // Animate the row destruction. // Blocks game loop lol.
     uint32_t start_animation = SDL_GetTicks();
     while (SDL_GetTicks() < start_animation + 500)
     {
@@ -300,12 +314,7 @@ static void tetromino_clear_row(TETRIS_STATE *tetris)
                 continue;
             for (int col = 0; col < WIDTH; col++)
             {
-                SDL_Rect rect = {
-                    (col + LEFT_OFFSET) * SQUARE_DIM,
-                    (row + TOP_OFFSET) * SQUARE_DIM,
-                    SQUARE_DIM,
-                    SQUARE_DIM,
-                };
+                SDL_Rect rect = transform_coords(col, row);
                 uint32_t passed = SDL_GetTicks() - start_animation;
                 int opacity = (500 - passed) / 255;
                 draw_rect(tetris->renderer, rect, (SDL_Color){0, 0, 0, opacity}, true);
@@ -325,7 +334,22 @@ static void tetromino_clear_row(TETRIS_STATE *tetris)
     memset(tetris->board, '.', WIDTH * cleared);
 
     // Add the score!
-    tetris->score += cleared ^ 500;
+    int level = tetris->score / SCORE_LEVEL_RATIO;
+    switch (cleared)
+    {
+    case 1:
+        tetris->score += 40 * (level + 1);
+        break;
+    case 2:
+        tetris->score += 100 * (level + 1);
+        break;
+    case 3:
+        tetris->score += 300 * (level + 1);
+        break;
+    default:
+        tetris->score += 1200 * (level + 1);
+        break;
+    }
 }
 
 // CORE LOOP FUNCTIONS
@@ -360,6 +384,7 @@ static void update_state(TETRIS_STATE *tetris)
 static void handle_events(TETRIS_STATE *tetris)
 {
     static SDL_Event event;
+    static uint32_t last_rotation;
     while (SDL_PollEvent(&event))
     {
         switch (event.type)
@@ -387,20 +412,24 @@ static void handle_events(TETRIS_STATE *tetris)
                         ? tetris->tetromino_x + 1
                         : tetris->tetromino_x;
                 break;
-            // Rotate
+            // Move down if possible\0 TODO: CHECK & RESET LAST FALL TIMER
             case SDL_SCANCODE_W:
             case SDL_SCANCODE_UP:
-                tetris->tetromino_rotation =
-                    (tetris->tetromino_rotation + 1) % ROTATIONS;
-                if (tetromino_has_space(tetris, tetris->tetromino_x,
-                                        tetris->tetromino_y))
-                    tetris->tetromino_rotation =
-                        (tetris->tetromino_rotation - 1) % ROTATIONS;
+                update_state(tetris);
                 break;
-            // Move down if possible\0 TODO: CHECK & RESET LAST FALL TIMER
+            // Rotate
             case SDL_SCANCODE_S:
             case SDL_SCANCODE_DOWN:
-                update_state(tetris);
+                if (SDL_GetTicks() > last_rotation + ROTATION_DELAY)
+                {
+                    tetris->tetromino_rotation =
+                        (tetris->tetromino_rotation + 1) % ROTATIONS;
+                    if (tetromino_has_space(tetris, tetris->tetromino_x,
+                                            tetris->tetromino_y))
+                        tetris->tetromino_rotation =
+                            (tetris->tetromino_rotation - 1) % ROTATIONS;
+                    last_rotation = SDL_GetTicks();
+                }
                 break;
             default:
                 break;
@@ -416,7 +445,7 @@ static void render_state(TETRIS_STATE *tetris)
     SDL_RenderClear(tetris->renderer);
 
     // Draw board box
-    for (int i = 0; i < HEIGHT + 1; i++)
+    for (int i = 0; i < HEIGHT; i++)
     {
         draw_tile(tetris->renderer, tetris->tiles, 0 - LEFT_OFFSET, i, 0);
         draw_tile(tetris->renderer, tetris->tiles, WIDTH, i, 0);
@@ -472,9 +501,13 @@ static void render_state(TETRIS_STATE *tetris)
         int sub_y = i / TETROMINO_WIDTH;
         int rotatedIndex =
             tetromino_translate_rotation(sub_x, sub_y,
+                                         tetris->tetromino_type,
                                          tetris->tetromino_rotation);
         sub_x = rotatedIndex % TETROMINO_WIDTH;
         sub_y = rotatedIndex / TETROMINO_WIDTH;
+
+        if (tetris->tetromino_y + sub_y < 0)
+            continue;
 
         switch (tetromino[tetris->tetromino_type][i])
         {
@@ -506,8 +539,13 @@ static void render_state(TETRIS_STATE *tetris)
 
     char score[16];
     sprintf(score, "Score: %7d", tetris->score);
-    draw_font(tetris->renderer, tetris->font, 2, 0, score);
-
+    draw_font(tetris->renderer, tetris->font, 0, 0, score);
+    char level[16];
+    sprintf(level, "Level: %u", tetris->score / SCORE_LEVEL_RATIO);
+    draw_font(tetris->renderer, tetris->font, 0, 1, level);
+    char speed[16];
+    sprintf(speed, "SPD: %d", MOVE_DELAY - (int)(MOVE_DELAY * (DIFFICULTY_RATIO * (tetris->score / SCORE_LEVEL_RATIO))));
+    draw_font(tetris->renderer, tetris->font, 5, 1, speed);
     SDL_RenderPresent(tetris->renderer);
 }
 
@@ -541,23 +579,6 @@ static bool game_over_window(TETRIS_STATE *tetris)
 }
 
 // INITIALIZATION FUNCTIONS
-static bool init_modules(void)
-{
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0)
-        return false;
-
-    if (TTF_Init() != 0)
-        return false;
-
-    return true;
-}
-
-static void quit_modules(void)
-{
-    TTF_Quit();
-    SDL_Quit();
-}
-
 static void init_rendering(TETRIS_STATE *tetris)
 {
     tetris->window =
@@ -598,10 +619,7 @@ static void reset_tetris_state(TETRIS_STATE *tetris)
 {
     memset(tetris->board, '.', (WIDTH * HEIGHT) * 2);
     tetris->score = 0;
-    tetris->tetromino_type = rand() % NUM_TETROMINO;
-    tetris->tetromino_x = WIDTH / 2;
-    tetris->tetromino_y = 0;
-    tetris->tetromino_rotation = DEG_0;
+    tetromino_init(tetris);
     tetris->status = PLAYING;
 }
 
@@ -611,6 +629,23 @@ static void tetris_game_over(TETRIS_STATE *tetris)
         reset_tetris_state(tetris);
     else
         tetris->status = CLOSING;
+}
+
+static bool init_modules(void)
+{
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0)
+        return false;
+
+    if (TTF_Init() != 0)
+        return false;
+
+    return true;
+}
+
+static void quit_modules(void)
+{
+    TTF_Quit();
+    SDL_Quit();
 }
 
 int main(int argc, char *argv[])
@@ -634,7 +669,7 @@ int main(int argc, char *argv[])
         this_frame = SDL_GetTicks();
         handle_events(&tetris);
 
-        if (tetris.last_move + MOVE_DELAY < this_frame)
+        if (tetris.last_move + (MOVE_DELAY - (int)(MOVE_DELAY * (DIFFICULTY_RATIO * (tetris.score / SCORE_LEVEL_RATIO)))) < this_frame)
             update_state(&tetris);
 
         render_state(&tetris);
