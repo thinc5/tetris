@@ -17,3 +17,5 @@ Ensuring that you have gcc and the SDL development tools installed, run the foll
 `gcc -g -Wall --std=c11 -lSDL2 -lSDL2_ttf -lSDL2_image tetris.c font.h tiles.h -o tetris`
 
 Don't forget to add .exe to the output if you're on windows!
+
+`gcc -g -Wall --std=c11 -lSDL2 -lSDL2_ttf -lSDL2_image tetris.c font.h tiles.h -DMUSIC theme.h over.h fall.h clear.h -o tetris`
