@@ -1,4 +1,11 @@
 tetris
 tetris.exe
+*.mp3
+*.wav
+*.o
 font.h
 tiles.h
+theme.h
+clear.h
+fall.h
+over.h

@@ -20,6 +20,7 @@
 #include "clear.h"
 #include "fall.h"
 #include "over.h"
+#include "level.h"
 
 #define VOLUME_DEFAULT (MIX_MAX_VOLUME / 8)
 #endif
@@ -29,11 +30,13 @@
 #define HEIGHT 20
 
 // Add space for boarder and UI
-#define LEFT_OFFSET 1
-#define RIGHT_OFFSET 5
+#define LEFT_OFFSET 5
+#define RIGHT_OFFSET 1
 // Account for top and bottom border
 #define TOP_OFFSET 1
 #define BOTTOM_OFFSET 1
+// UI Horizontal offset
+#define UI_OFFSET 3
 
 // DISPLAY SETTINGS
 #define WINDOW_TITLE "Tetris"
@@ -56,8 +59,7 @@
 #define MOVE_DELAY 1000
 #define MIN_MOVE_DELAY 50
 #define ROTATION_DELAY 150
-#define DIFFICULTY_RATIO 0.2
-#define SCORE_LEVEL_RATIO 500 // 1000
+#define DIFFICULTY_RATIO 0.1
 
 // STRUCTURE AND DATA DEFINITIONS
 typedef enum TETROMINO
@@ -104,14 +106,21 @@ typedef struct TETRIS_STATE
     Mix_Chunk *place;
     Mix_Chunk *clear;
     Mix_Chunk *over;
+    Mix_Chunk *level_up;
 #endif
     // Game status
     GAME_STATUS status;
     // Timing
+    uint32_t start_time;
+    uint32_t pause_time;
+    uint32_t pause_start;
     uint32_t last_frame;
     uint32_t last_move;
+    uint32_t last_rotate;
     // Score
     uint16_t score;
+    uint16_t rows_cleared;
+    uint8_t level;
     // Board
     char board[(WIDTH * HEIGHT) * 2];
     // Tetris Tetromino bag
@@ -123,6 +132,13 @@ typedef struct TETRIS_STATE
     int tetromino_y;
     ROTATION tetromino_rotation;
 } TETRIS_STATE;
+
+// FUNCTION PROTOTYPES
+static void draw_border(TETRIS_STATE *tetris);
+static void draw_ui(TETRIS_STATE *tetris);
+static void draw_bag(TETRIS_STATE *tetris);
+static void draw_placed(TETRIS_STATE *tetris);
+static void draw_piece(TETRIS_STATE *tetris);
 
 // STATIC RESOURCES
 const char *tetromino[NUM_TETROMINO] = {
@@ -155,6 +171,31 @@ const char *tetromino[NUM_TETROMINO] = {
     "...."
     "....",
 };
+
+// TIMING FUNCTIONS
+static uint32_t tetris_get_time(TETRIS_STATE *tetris)
+{
+    return SDL_GetTicks() - tetris->start_time + tetris->pause_time;
+}
+
+static void tetris_pause(TETRIS_STATE *tetris)
+{
+    tetris->pause_start = SDL_GetTicks();
+    tetris->status = PAUSED;
+#ifdef MUSIC
+    Mix_PauseMusic();
+#endif
+}
+
+static void tetris_unpause(TETRIS_STATE *tetris)
+{
+
+    tetris->pause_time += SDL_GetTicks() - tetris->pause_start;
+    tetris->status = PLAYING;
+#ifdef MUSIC
+    Mix_ResumeMusic();
+#endif
+}
 
 // HELPER FUNCTIONS
 static int tetromino_translate_rotation(int x, int y, TETROMINO t,
@@ -190,10 +231,12 @@ static void tetromino_create_bag(TETRIS_STATE *tetris)
         tetris->tetromino_bag[i] = t;
     }
     tetris->bag_position = 0;
+    draw_bag(tetris);
 }
 
-static int tetromino_has_space(TETRIS_STATE *tetris, int x, int y)
+static int tetromino_has_space(TETRIS_STATE *tetris, ROTATION r, int x, int y)
 {
+    // Returns 1 for out of bounds, 2 for block placement and 3 for game over.
     for (int i = 0; i < TETROMINO_SIZE; i++)
     {
         // Skip empty spaces
@@ -204,24 +247,23 @@ static int tetromino_has_space(TETRIS_STATE *tetris, int x, int y)
         int rotatedIndex =
             tetromino_translate_rotation(i % TETROMINO_WIDTH,
                                          i / TETROMINO_WIDTH,
-                                         tetris->tetromino_type,
-                                         tetris->tetromino_rotation);
+                                         tetris->tetromino_type, r);
 
         // Add the indexes to the top left corner to get the actual position
-        int real_x = x + rotatedIndex % TETROMINO_WIDTH;
-        int real_y = y + rotatedIndex / TETROMINO_WIDTH;
+        int real_x = x + (rotatedIndex % TETROMINO_WIDTH);
+        int real_y = y + (rotatedIndex / TETROMINO_WIDTH);
 
         // Check the x axis bounds
-        if (real_x < 0 || real_x > WIDTH - 1)
+        if (real_x < 0 || real_x >= WIDTH)
             return 1;
-
-        // Off the screen, cannot be a game over
-        if (real_y < 0)
-            continue;
 
         // Check if we have hit the bottom
         if (real_y >= HEIGHT)
             return 2;
+
+        // Off the screen, cannot be a game over
+        if (real_y < 0)
+            continue;
 
         // Check for game over or block placement
         // Check space that we are moving to is empty
@@ -236,6 +278,40 @@ static int tetromino_has_space(TETRIS_STATE *tetris, int x, int y)
         }
     }
     return 0;
+}
+
+static bool tetromino_move(TETRIS_STATE *tetris, ROTATION r, int x, int y)
+{
+    // Checks if new state is possible, writes if so otherwise does nothing.
+    // Checks and allows for wall kicks
+    // Check with original movement attempt.
+    if (tetromino_has_space(tetris, r, x, y) == 0)
+    {
+        // Can move! write new position.
+        tetris->tetromino_rotation = r;
+        tetris->tetromino_x = x;
+        tetris->tetromino_y = y;
+        return true;
+    }
+    // WALL KICKS
+    // Check if there is a free space to the right.
+    if (tetromino_has_space(tetris, r, x + 1, y) == 0)
+    {
+        tetris->tetromino_rotation = r;
+        tetris->tetromino_x = x + 1;
+        tetris->tetromino_y = y;
+        return true;
+    }
+    // Check if there is a free space to the left.
+    if (tetromino_has_space(tetris, r, x - 1, y) == 0)
+    {
+        tetris->tetromino_rotation = r;
+        tetris->tetromino_x = x - 1;
+        tetris->tetromino_y = y;
+        return true;
+    }
+    // FLOOR KICKS // DO WE NEED IT?
+    return false;
 }
 
 static void tetromino_init(TETRIS_STATE *tetris)
@@ -368,15 +444,13 @@ static void draw_font(SDL_Renderer *renderer, TTF_Font *font, int x, int y,
                       const char *str)
 {
     static SDL_Color c = {255, 255, 255, 255};
-    int font_height = TTF_FontHeight(font);
-    int font_width = (SQUARE_DIM / 5) * strlen(str);
+    SDL_Surface *surface = TTF_RenderText_Solid(font, str, c);
     SDL_Rect pos = {
-        .x = SQUARE_DIM * (x + WIDTH + 2),
-        .y = SQUARE_DIM * (y + TOP_OFFSET),
-        .w = font_width,
-        .h = font_height,
+        .x = SQUARE_DIM * (x + 1) + 2,
+        .y = (surface->h * y) + (TOP_OFFSET * SQUARE_DIM),
     };
-    SDL_Surface *surface = TTF_RenderText_Blended(font, str, c);
+    pos.w = surface->w;
+    pos.h = surface->h;
     SDL_Texture *texture = SDL_CreateTextureFromSurface(renderer, surface);
     SDL_FreeSurface(surface);
     SDL_RenderCopy(renderer, texture, NULL, &pos);
@@ -402,12 +476,7 @@ static void tetromino_clear_row(TETRIS_STATE *tetris)
 
     // No rows cleared.
     if (!cleared)
-    {
-#ifdef MUSIC
-        Mix_PlayChannel(-1, tetris->place, 0);
-#endif
         return;
-    }
 
 #ifdef MUSIC
     Mix_PlayChannel(-1, tetris->clear, 0);
@@ -442,132 +511,121 @@ static void tetromino_clear_row(TETRIS_STATE *tetris)
     memset(tetris->board, '.', WIDTH * cleared);
 
     // Add the score!
-    int level = tetris->score / SCORE_LEVEL_RATIO;
     switch (cleared)
     {
     case 1:
-        tetris->score += 40 * (level + 1);
+        tetris->score += 40 * (tetris->level + 1);
+        tetris->rows_cleared += cleared;
         break;
     case 2:
-        tetris->score += 100 * (level + 1);
+        tetris->score += 100 * (tetris->level + 1);
+        tetris->rows_cleared += cleared;
         break;
     case 3:
-        tetris->score += 300 * (level + 1);
+        tetris->score += 300 * (tetris->level + 1);
+        tetris->rows_cleared += cleared;
         break;
     default:
-        tetris->score += 1200 * (level + 1);
+        tetris->score += 1200 * (tetris->level + 1);
+        tetris->rows_cleared += cleared * 2;
         break;
     }
-}
+    // New level?
+    int level;
+    if (tetris->level < 10)
+        level = tetris->rows_cleared / 5;
+    else if (tetris->level < 20)
+        level = tetris->rows_cleared / 10;
+    else if (tetris->level < 30)
+        level = tetris->rows_cleared / 15;
+    else
+        level = tetris->rows_cleared / 25;
 
-// CORE LOOP FUNCTIONS
-static void update_state(TETRIS_STATE *tetris)
-{
-    // Are we writing the tetromino and creating a new one?
-    if (tetris->last_move + MIN_MOVE_DELAY >= SDL_GetTicks())
-        return;
-
-    tetris->last_move = SDL_GetTicks();
-
-    int move_status = tetromino_has_space(tetris, tetris->tetromino_x,
-                                          tetris->tetromino_y + 1);
-    if (move_status == 2)
+    if (level > tetris->level)
     {
-        tetromino_write(tetris);
-        tetromino_clear_row(tetris);
-        tetromino_init(tetris);
-        return;
-    }
-
-    if (move_status == 3)
-    {
-        tetris->status = GAME_OVER;
-        return;
-    }
-
-    // Update the move timer.
-    tetris->tetromino_y++;
-}
-
-static void handle_events(TETRIS_STATE *tetris)
-{
-    static SDL_Event event;
-    static uint32_t last_rotation;
-    while (SDL_PollEvent(&event))
-    {
-        switch (event.type)
-        {
-        case SDL_QUIT:
-            tetris->status = CLOSING;
-            break;
-        case SDL_KEYDOWN:
-            switch (event.key.keysym.scancode)
-            {
-            // Move left and right
-            case SDL_SCANCODE_A:
-            case SDL_SCANCODE_LEFT:
-                tetris->tetromino_x =
-                    !tetromino_has_space(tetris, tetris->tetromino_x - 1,
-                                         tetris->tetromino_y)
-                        ? tetris->tetromino_x - 1
-                        : tetris->tetromino_x;
-                break;
-            case SDL_SCANCODE_D:
-            case SDL_SCANCODE_RIGHT:
-                tetris->tetromino_x =
-                    !tetromino_has_space(tetris, tetris->tetromino_x + 1,
-                                         tetris->tetromino_y)
-                        ? tetris->tetromino_x + 1
-                        : tetris->tetromino_x;
-                break;
-            // Move down if possible\0 TODO: CHECK & RESET LAST FALL TIMER
-            case SDL_SCANCODE_W:
-            case SDL_SCANCODE_UP:
-                update_state(tetris);
-                break;
-            // Rotate
-            case SDL_SCANCODE_S:
-            case SDL_SCANCODE_DOWN:
-                if (SDL_GetTicks() > last_rotation + ROTATION_DELAY)
-                {
-                    tetris->tetromino_rotation =
-                        (tetris->tetromino_rotation + 1) % ROTATIONS;
-                    if (tetromino_has_space(tetris, tetris->tetromino_x,
-                                            tetris->tetromino_y))
-                        tetris->tetromino_rotation =
-                            (tetris->tetromino_rotation - 1) % ROTATIONS;
-                    last_rotation = SDL_GetTicks();
-                }
-                break;
-            default:
-                break;
-            }
-        default:
-            break;
-        }
+        tetris->level = level;
+#ifdef MUSIC
+        Mix_PlayChannel(-1, tetris->level_up, 0);
+#endif
     }
 }
 
-static void render_state(TETRIS_STATE *tetris)
-{
-    SDL_RenderClear(tetris->renderer);
+// RENDER PRESETS
 
+static void draw_border(TETRIS_STATE *tetris)
+{
     // Draw board box
+    // Vertical barriers
     for (int i = 0; i < HEIGHT; i++)
     {
-        draw_tetromino_tile(tetris, 0, 0 - LEFT_OFFSET, i);
-        draw_tetromino_tile(tetris, 0, WIDTH, i);
-        draw_tetromino_tile(tetris, 0, WIDTH + RIGHT_OFFSET - 1, i);
+        draw_tetromino_tile(tetris, 0, -LEFT_OFFSET, i); // LEFT EDGE
+        draw_tetromino_tile(tetris, 0, WIDTH, i);        // RIGHT EDGE
+        draw_tetromino_tile(tetris, 0, -1, i);           // UI EDGE
     }
+    // Horizontal barriers
     for (int i = 0 - LEFT_OFFSET; i < WIDTH + LEFT_OFFSET + RIGHT_OFFSET; i++)
     {
-        draw_tetromino_tile(tetris, 0, i, HEIGHT);
-        draw_tetromino_tile(tetris, 0, i, -1);
-        if (i > WIDTH)
-            draw_tetromino_tile(tetris, 0, i, 2);
+        draw_tetromino_tile(tetris, 0, i, HEIGHT); // TOP
+        draw_tetromino_tile(tetris, 0, i, -1);     // BOTTOM
+        if (i < 0)
+            draw_tetromino_tile(tetris, 0, i, UI_OFFSET); // UI SEPERATOR
     }
+}
 
-    // Draw board status
+static void draw_ui(TETRIS_STATE *tetris)
+{
+    const SDL_Rect viewport = {
+        .x = (1) * SQUARE_DIM,
+        .y = (1) * SQUARE_DIM,
+        .w = (LEFT_OFFSET - 2) * SQUARE_DIM,
+        .h = (UI_OFFSET)*SQUARE_DIM,
+    };
+    SDL_RenderFillRect(tetris->renderer, &viewport);
+
+    // Draw score, level and time
+    char time[] = "Time:           ";
+    sprintf(time + 6, " %u", tetris_get_time(tetris) / 1000);
+    draw_font(tetris->renderer, tetris->font, 0, 0, time);
+    char level[] = "Level:           ";
+    sprintf(level + 7, " %u", tetris->level);
+    draw_font(tetris->renderer, tetris->font, 0, 1, level);
+    char score[] = "Score:";
+    draw_font(tetris->renderer, tetris->font, 0, 2, score);
+    char points[9];
+    sprintf(points, "%.8d", tetris->score);
+    draw_font(tetris->renderer, tetris->font, 0, 3, points);
+}
+
+static void draw_bag(TETRIS_STATE *tetris)
+{
+    const SDL_Rect viewport = {
+        .x = (1) * SQUARE_DIM,
+        .y = (UI_OFFSET + 2) * SQUARE_DIM,
+        .w = (LEFT_OFFSET - 2) * SQUARE_DIM,
+        .h = (HEIGHT - UI_OFFSET - 1) * SQUARE_DIM,
+    };
+    SDL_RenderFillRect(tetris->renderer, &viewport);
+
+    int x = 1 - LEFT_OFFSET;
+    int y = UI_OFFSET + 1;
+    for (int p = tetris->bag_position; p < NUM_TETROMINO; p++)
+    {
+        int position = p - tetris->bag_position;
+        TETROMINO t = tetris->tetromino_bag[p];
+        int new_y = y + position;
+        // We dont want to write out of our section
+        if (new_y + TETROMINO_WIDTH >= WIDTH * 2)
+            break;
+
+        draw_tetromino_preview_tile(tetris, t, x, new_y);
+        // The perminant offset between pieces
+        y += 2;
+    }
+}
+
+static void draw_placed(TETRIS_STATE *tetris)
+{
+    // Draw board state
     for (int i = 0; i < (WIDTH * HEIGHT) * 2; i++)
     {
         int x = (i % WIDTH);
@@ -575,7 +633,10 @@ static void render_state(TETRIS_STATE *tetris)
         int y = (i / (HEIGHT / 2));
         draw_tetromino_tile(tetris, tetris->board[i], x, y);
     }
+}
 
+static void draw_piece(TETRIS_STATE *tetris)
+{
     // Draw falling piece
     for (int i = 0; i < TETROMINO_SIZE; i++)
     {
@@ -599,40 +660,158 @@ static void render_state(TETRIS_STATE *tetris)
                             tetris->tetromino_x + sub_x,
                             tetris->tetromino_y + sub_y);
     }
+}
 
-    // Draw ghost piece
+static void draw_board(TETRIS_STATE *tetris)
+{
+    const SDL_Rect viewport = {
+        .x = (LEFT_OFFSET)*SQUARE_DIM,
+        .y = 1 * SQUARE_DIM,
+        .w = WIDTH * SQUARE_DIM,
+        .h = HEIGHT * SQUARE_DIM,
+    };
+    SDL_RenderFillRect(tetris->renderer, &viewport);
+    draw_placed(tetris);
+    draw_piece(tetris);
+}
 
-    // Draw score and level
-    char score[21];
-    sprintf(score, "Score: %8d", tetris->score);
-    draw_font(tetris->renderer, tetris->font, 0, 0, score);
-    char level[21];
-    sprintf(level, "Level: %8u", tetris->score / SCORE_LEVEL_RATIO);
-    draw_font(tetris->renderer, tetris->font, 0, 1, level);
+// CORE LOOP FUNCTIONS
+static void update_state(TETRIS_STATE *tetris)
+{
+    // Are we writing the tetromino and creating a new one?
+    if (tetris->last_move + MIN_MOVE_DELAY >= tetris_get_time(tetris))
+        return;
 
-    // Draw next pieces
-    int x = WIDTH + 1;
-    int y = 4;
-    for (int p = tetris->bag_position; p < NUM_TETROMINO; p++)
+    tetris->last_move = tetris_get_time(tetris);
+
+    int move_status = tetromino_has_space(tetris, tetris->tetromino_rotation, tetris->tetromino_x,
+                                          tetris->tetromino_y + 1);
+    if (move_status == 2)
     {
-        TETROMINO t = tetris->tetromino_bag[p];
-        draw_tetromino_preview_tile(tetris, t, x,
-                                    y + ((p - tetris->bag_position) * ((TETROMINO_WIDTH / 3))));
-        y += 2;
+#ifdef MUSIC
+        Mix_PlayChannel(-1, tetris->place, 0);
+#endif
+        tetromino_write(tetris);
+        tetromino_clear_row(tetris);
+        tetromino_init(tetris);
+        draw_bag(tetris);
+        draw_board(tetris);
+        return;
     }
 
-    SDL_RenderPresent(tetris->renderer);
+    if (move_status == 3)
+    {
+        tetris->status = GAME_OVER;
+        return;
+    }
+
+    // Update the move timer.
+    tetris->tetromino_y++;
+    draw_board(tetris);
+}
+
+static void handle_events(TETRIS_STATE *tetris)
+{
+    static SDL_Event event;
+#ifdef MUSIC
+    static bool muted;
+#endif
+    while (SDL_PollEvent(&event))
+    {
+        switch (event.type)
+        {
+        case SDL_QUIT:
+            tetris->status = CLOSING;
+            break;
+        case SDL_KEYDOWN:
+#ifdef MUSIC
+            if (event.key.keysym.scancode == SDL_SCANCODE_M)
+            {
+                if (muted)
+                {
+                    Mix_VolumeMusic(VOLUME_DEFAULT);
+                    Mix_Volume(-1, VOLUME_DEFAULT * 1.5);
+                }
+                else
+                {
+                    Mix_VolumeMusic(0);
+                    Mix_Volume(-1, 0);
+                }
+                muted = !muted;
+            }
+#endif
+            if (tetris->status == PAUSED)
+            {
+                switch (event.key.keysym.scancode)
+                {
+                case SDL_SCANCODE_P:
+                case SDL_SCANCODE_ESCAPE:
+                    tetris_unpause(tetris);
+                    break;
+                default:
+                    break;
+                }
+                break;
+            }
+            switch (event.key.keysym.scancode)
+            {
+            // Move left and right
+            case SDL_SCANCODE_A:
+            case SDL_SCANCODE_LEFT:
+                if (tetromino_move(tetris, tetris->tetromino_rotation,
+                                   tetris->tetromino_x - 1, tetris->tetromino_y))
+                    draw_board(tetris);
+                break;
+            case SDL_SCANCODE_D:
+            case SDL_SCANCODE_RIGHT:
+                if (tetromino_move(tetris, tetris->tetromino_rotation,
+                                   tetris->tetromino_x + 1, tetris->tetromino_y))
+                    draw_board(tetris);
+                break;
+            // Move down one unit (trigger a state update early)
+            case SDL_SCANCODE_W:
+            case SDL_SCANCODE_UP:
+                update_state(tetris);
+                break;
+            // Rotate
+            case SDL_SCANCODE_S:
+            case SDL_SCANCODE_DOWN:
+                if (tetris_get_time(tetris) <= tetris->last_rotate + ROTATION_DELAY)
+                    break;
+                if (tetromino_move(tetris,
+                                   (tetris->tetromino_rotation + 1) % ROTATIONS,
+                                   tetris->tetromino_x, tetris->tetromino_y))
+                {
+                    draw_board(tetris);
+                    tetris->last_rotate = tetris_get_time(tetris);
+                }
+                break;
+            case SDL_SCANCODE_P:
+            case SDL_SCANCODE_ESCAPE:
+                tetris_pause(tetris);
+                break;
+            default:
+                break;
+            }
+        default:
+            break;
+        }
+    }
 }
 
 // GAME OVER WINDOW
 static bool game_over_window(TETRIS_STATE *tetris)
 {
+#ifdef MUSIC
+    Mix_PlayChannel(-1, tetris->over, 0);
+#endif
     const SDL_MessageBoxButtonData buttons[] = {
         {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 0, "Play Again"},
         {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 1, "Quit"},
     };
-    char score[30];
-    sprintf(score, "Score: %.7d\nPlay again?", tetris->score);
+    char score[38];
+    sprintf(score, "Level: %d\nScore: %.7d\nPlay again?", tetris->level,
+            tetris->score);
     const SDL_MessageBoxData messageboxdata = {
         SDL_MESSAGEBOX_INFORMATION, /* .flags */
         tetris->window,             /* .window */
@@ -681,51 +860,59 @@ static void free_rendering(TETRIS_STATE *tetris)
 }
 
 #ifdef MUSIC
-static void init_sound(TETRIS_STATE *state)
+static void init_sound(TETRIS_STATE *tetris)
 {
     Mix_VolumeMusic(VOLUME_DEFAULT);
-    state->theme = Mix_LoadMUS_RW(SDL_RWFromConstMem(theme_mp3, theme_mp3_len), -1);
-    // state->move = Mix_LoadChunk_RW(SDL_RWFromConstMem(theme_mp3, theme_mp3_len), -1);
-    state->place = Mix_LoadWAV_RW(SDL_RWFromConstMem(fall_wav, fall_wav_len), -1);
-    state->clear = Mix_LoadWAV_RW(SDL_RWFromConstMem(clear_wav, clear_wav_len), -1);
-    state->over = Mix_LoadWAV_RW(SDL_RWFromConstMem(over_mp3, over_mp3_len), -1);
+    Mix_Volume(-1, VOLUME_DEFAULT * 1.5);
+    tetris->theme = Mix_LoadMUS_RW(SDL_RWFromConstMem(theme_mp3, theme_mp3_len), -1);
+    tetris->place = Mix_LoadWAV_RW(SDL_RWFromConstMem(fall_wav, fall_wav_len), -1);
+    tetris->clear = Mix_LoadWAV_RW(SDL_RWFromConstMem(clear_wav, clear_wav_len), -1);
+    tetris->over = Mix_LoadWAV_RW(SDL_RWFromConstMem(over_wav, over_wav_len), -1);
+    tetris->level_up = Mix_LoadWAV_RW(SDL_RWFromConstMem(level_wav, level_wav_len), -1);
 }
 
-static void free_sound(TETRIS_STATE *state)
+static void free_sound(TETRIS_STATE *tetris)
 {
-    Mix_FreeMusic(state->theme);
-    Mix_FreeChunk(state->place);
-    Mix_FreeChunk(state->clear);
-    Mix_FreeChunk(state->over);
+    Mix_FreeMusic(tetris->theme);
+    Mix_FreeChunk(tetris->place);
+    Mix_FreeChunk(tetris->clear);
+    Mix_FreeChunk(tetris->over);
+    Mix_FreeChunk(tetris->level_up);
 }
 #endif
-
-static void init_tetris_state(TETRIS_STATE *tetris)
-{
-    tetris->status = PLAYING;
-    memset(tetris->board, '.', (WIDTH * HEIGHT) * 2);
-    tetris->last_frame = SDL_GetTicks();
-    tetris->last_move = 0;
-    tetromino_create_bag(tetris);
-    tetromino_init(tetris);
-    // Start at 0 for the first piece
-    tetris->tetromino_y = 0;
-    tetris->score = 0;
-#ifdef MUSIC
-    Mix_PlayMusic(tetris->theme, -1);
-#endif
-}
 
 static void reset_tetris_state(TETRIS_STATE *tetris)
 {
     memset(tetris->board, '.', (WIDTH * HEIGHT) * 2);
+    tetris->level = 0;
+    tetris->rows_cleared = 0;
     tetris->score = 0;
     tetromino_create_bag(tetris);
     tetromino_init(tetris);
+    tetris->tetromino_y = 0;
     tetris->status = PLAYING;
 #ifdef MUSIC
     Mix_PlayMusic(tetris->theme, -1);
 #endif
+    // Initialize the timers.
+    uint32_t now = SDL_GetTicks();
+    tetris->start_time = now;
+    tetris->pause_time = 0;
+    tetris->pause_start = 0;
+    tetris->last_frame = now;
+    tetris->last_move = 0;
+    tetris->last_rotate = 0;
+    // Draw the boarder
+    draw_border(tetris);
+    draw_board(tetris);
+    draw_ui(tetris);
+    draw_bag(tetris);
+}
+
+static void init_tetris_state(TETRIS_STATE *tetris)
+{
+    tetris->status = PLAYING;
+    reset_tetris_state(tetris);
 }
 
 static void tetris_game_over(TETRIS_STATE *tetris)
@@ -785,21 +972,28 @@ int main(int argc, char *argv[])
     uint32_t this_frame = 0;
     while (tetris.status != CLOSING)
     {
-        this_frame = SDL_GetTicks();
+        this_frame = tetris_get_time(&tetris);
         handle_events(&tetris);
-
-        if (tetris.last_move + (MOVE_DELAY - (int)(MOVE_DELAY * (DIFFICULTY_RATIO * (tetris.score / SCORE_LEVEL_RATIO)))) < this_frame)
-            update_state(&tetris);
-
-        render_state(&tetris);
-        this_frame = SDL_GetTicks();
+        switch (tetris.status)
+        {
+        case PLAYING:
+            if (tetris.last_move + MOVE_DELAY - (int)(MOVE_DELAY * DIFFICULTY_RATIO * tetris.level) < this_frame)
+                update_state(&tetris);
+            break;
+        case PAUSED:
+            break;
+        case GAME_OVER:
+            tetris_game_over(&tetris);
+            break;
+        default:
+            break;
+        }
+        draw_ui(&tetris);
+        SDL_RenderPresent(tetris.renderer);
+        this_frame = tetris_get_time(&tetris);
         if (tetris.last_frame > this_frame - MAX_FPS)
             SDL_Delay(tetris.last_frame + MAX_FPS - this_frame);
-
-        if (tetris.status == GAME_OVER)
-            tetris_game_over(&tetris);
-
-        tetris.last_frame = SDL_GetTicks();
+        tetris.last_frame = tetris_get_time(&tetris);
     }
 #ifdef MUSIC
     free_sound(&tetris);
