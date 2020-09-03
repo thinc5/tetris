@@ -30,7 +30,7 @@
 
 // Add space for boarder and UI
 #define LEFT_OFFSET 1
-#define RIGHT_OFFSET 6
+#define RIGHT_OFFSET 5
 // Account for top and bottom border
 #define TOP_OFFSET 1
 #define BOTTOM_OFFSET 1
@@ -157,7 +157,8 @@ const char *tetromino[NUM_TETROMINO] = {
 };
 
 // HELPER FUNCTIONS
-static int tetromino_translate_rotation(int x, int y, TETROMINO t, ROTATION rotation)
+static int tetromino_translate_rotation(int x, int y, TETROMINO t,
+                                        ROTATION rotation)
 {
     // Disable O rotation.
     if (t == O)
@@ -301,12 +302,66 @@ static void draw_rect(SDL_Renderer *renderer, SDL_Rect pos, SDL_Color colour,
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 }
 
-static void draw_tile(SDL_Renderer *renderer, SDL_Texture *tex, int x, int y,
-                      int index)
+static void draw_tile(SDL_Renderer *renderer, SDL_Rect dst_rect,
+                      SDL_Texture *tex, char c)
 {
-    SDL_Rect dst_rect = transform_coords(x, y);
+    int index = -1;
+    switch (c)
+    {
+    case 0:
+        index = 0;
+        break;
+    case 'I':
+        index = 1;
+        break;
+    case 'O':
+        index = 2;
+        break;
+    case 'T':
+        index = 3;
+        break;
+    case 'S':
+        index = 4;
+        break;
+    case 'Z':
+        index = 5;
+        break;
+    case 'J':
+        index = 6;
+        break;
+    case 'L':
+        index = 7;
+        break;
+    default:
+        return;
+    }
     SDL_Rect src_rect = {index * 32, 0, 32, 32};
     SDL_RenderCopy(renderer, tex, &src_rect, &dst_rect);
+}
+
+static void draw_tetromino_tile(TETRIS_STATE *tetris, char t, int x, int y)
+{
+    SDL_Rect dst_rect = transform_coords(x, y);
+    draw_tile(tetris->renderer, dst_rect, tetris->tiles, t);
+}
+
+static void draw_tetromino_preview_tile(TETRIS_STATE *tetris, TETROMINO t,
+                                        int x, int y)
+{
+    // Position of the top left quad
+    SDL_Rect start_rect = transform_coords(x, y);
+    start_rect.w = SQUARE_DIM / 2;
+    start_rect.h = SQUARE_DIM / 2;
+    for (int i = 0; i < TETROMINO_SIZE; i++)
+    {
+        int sub_x = i % TETROMINO_WIDTH;
+        int sub_y = i / TETROMINO_WIDTH;
+        SDL_Rect dst_rect = start_rect;
+        dst_rect.x += (SQUARE_DIM / 2) * sub_x;
+        dst_rect.y += (SQUARE_DIM / 2) * sub_y;
+        char c = tetromino[t][i];
+        draw_tile(tetris->renderer, dst_rect, tetris->tiles, c);
+    }
 }
 
 static void draw_font(SDL_Renderer *renderer, TTF_Font *font, int x, int y,
@@ -500,14 +555,16 @@ static void render_state(TETRIS_STATE *tetris)
     // Draw board box
     for (int i = 0; i < HEIGHT; i++)
     {
-        draw_tile(tetris->renderer, tetris->tiles, 0 - LEFT_OFFSET, i, 0);
-        draw_tile(tetris->renderer, tetris->tiles, WIDTH, i, 0);
-        draw_tile(tetris->renderer, tetris->tiles, WIDTH + RIGHT_OFFSET - 1, i, 0);
+        draw_tetromino_tile(tetris, 0, 0 - LEFT_OFFSET, i);
+        draw_tetromino_tile(tetris, 0, WIDTH, i);
+        draw_tetromino_tile(tetris, 0, WIDTH + RIGHT_OFFSET - 1, i);
     }
     for (int i = 0 - LEFT_OFFSET; i < WIDTH + LEFT_OFFSET + RIGHT_OFFSET; i++)
     {
-        draw_tile(tetris->renderer, tetris->tiles, i, HEIGHT, 0);
-        draw_tile(tetris->renderer, tetris->tiles, i, -1, 0);
+        draw_tetromino_tile(tetris, 0, i, HEIGHT);
+        draw_tetromino_tile(tetris, 0, i, -1);
+        if (i > WIDTH)
+            draw_tetromino_tile(tetris, 0, i, 2);
     }
 
     // Draw board status
@@ -516,32 +573,7 @@ static void render_state(TETRIS_STATE *tetris)
         int x = (i % WIDTH);
         // Uh why?
         int y = (i / (HEIGHT / 2));
-        switch (tetris->board[i])
-        {
-        case 'I':
-            draw_tile(tetris->renderer, tetris->tiles, x, y, 1);
-            break;
-        case 'O':
-            draw_tile(tetris->renderer, tetris->tiles, x, y, 2);
-            break;
-        case 'T':
-            draw_tile(tetris->renderer, tetris->tiles, x, y, 3);
-            break;
-        case 'S':
-            draw_tile(tetris->renderer, tetris->tiles, x, y, 4);
-            break;
-        case 'Z':
-            draw_tile(tetris->renderer, tetris->tiles, x, y, 5);
-            break;
-        case 'J':
-            draw_tile(tetris->renderer, tetris->tiles, x, y, 6);
-            break;
-        case 'L':
-            draw_tile(tetris->renderer, tetris->tiles, x, y, 7);
-            break;
-        default:
-            break;
-        }
+        draw_tetromino_tile(tetris, tetris->board[i], x, y);
     }
 
     // Draw falling piece
@@ -563,49 +595,30 @@ static void render_state(TETRIS_STATE *tetris)
         if (tetris->tetromino_y + sub_y < 0)
             continue;
 
-        switch (tetromino[tetris->tetromino_type][i])
-        {
-        case 'I':
-            draw_tile(tetris->renderer, tetris->tiles, tetris->tetromino_x + sub_x, tetris->tetromino_y + sub_y, 1);
-            break;
-        case 'O':
-            draw_tile(tetris->renderer, tetris->tiles, tetris->tetromino_x + sub_x, tetris->tetromino_y + sub_y, 2);
-            break;
-        case 'T':
-            draw_tile(tetris->renderer, tetris->tiles, tetris->tetromino_x + sub_x, tetris->tetromino_y + sub_y, 3);
-            break;
-        case 'S':
-            draw_tile(tetris->renderer, tetris->tiles, tetris->tetromino_x + sub_x, tetris->tetromino_y + sub_y, 4);
-            break;
-        case 'Z':
-            draw_tile(tetris->renderer, tetris->tiles, tetris->tetromino_x + sub_x, tetris->tetromino_y + sub_y, 5);
-            break;
-        case 'J':
-            draw_tile(tetris->renderer, tetris->tiles, tetris->tetromino_x + sub_x, tetris->tetromino_y + sub_y, 6);
-            break;
-        case 'L':
-            draw_tile(tetris->renderer, tetris->tiles, tetris->tetromino_x + sub_x, tetris->tetromino_y + sub_y, 7);
-            break;
-        default:
-            break;
-        }
+        draw_tetromino_tile(tetris, tetromino[tetris->tetromino_type][i],
+                            tetris->tetromino_x + sub_x,
+                            tetris->tetromino_y + sub_y);
     }
 
     // Draw ghost piece
 
-    // Draw UI elements
+    // Draw score and level
     char score[21];
-    sprintf(score, "Score: %13d", tetris->score);
+    sprintf(score, "Score: %8d", tetris->score);
     draw_font(tetris->renderer, tetris->font, 0, 0, score);
     char level[21];
-    sprintf(level, "Level: %13u", tetris->score / SCORE_LEVEL_RATIO);
+    sprintf(level, "Level: %8u", tetris->score / SCORE_LEVEL_RATIO);
     draw_font(tetris->renderer, tetris->font, 0, 1, level);
 
     // Draw next pieces
-    draw_font(tetris->renderer, tetris->font, 0, 3, "Next Piece");
-    for (int i = tetris->bag_position; i < NUM_TETROMINO; i++)
+    int x = WIDTH + 1;
+    int y = 4;
+    for (int p = tetris->bag_position; p < NUM_TETROMINO; p++)
     {
-        draw_font(tetris->renderer, tetris->font, 0, 3 + NUM_TETROMINO - i, "Next Pieces");
+        TETROMINO t = tetris->tetromino_bag[p];
+        draw_tetromino_preview_tile(tetris, t, x,
+                                    y + ((p - tetris->bag_position) * ((TETROMINO_WIDTH / 3))));
+        y += 2;
     }
 
     SDL_RenderPresent(tetris->renderer);
