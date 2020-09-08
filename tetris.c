@@ -25,6 +25,10 @@
 #define VOLUME_DEFAULT (MIX_MAX_VOLUME / 8)
 #endif
 
+#ifdef WASM
+#include <emscripten/emscripten.h>
+#endif
+
 // PLAY GRID DIMENSIONS
 #define WIDTH 10
 #define HEIGHT 20
@@ -139,6 +143,8 @@ static void draw_ui(TETRIS_STATE *tetris);
 static void draw_bag(TETRIS_STATE *tetris);
 static void draw_placed(TETRIS_STATE *tetris);
 static void draw_piece(TETRIS_STATE *tetris);
+static void main_loop(void *data);
+static void reset_tetris_state(TETRIS_STATE *tetris);
 
 // STATIC RESOURCES
 const char *tetromino[NUM_TETROMINO] = {
@@ -481,24 +487,24 @@ static void tetromino_clear_row(TETRIS_STATE *tetris)
 #ifdef MUSIC
     Mix_PlayChannel(-1, tetris->clear, 0);
 #endif
-    // Animate the row destruction. // Blocks game loop lol.
-    uint32_t start_animation = SDL_GetTicks();
-    while (SDL_GetTicks() < start_animation + 500)
-    {
-        for (int row = 0; row < HEIGHT; row++)
-        {
-            if (!cleared_rows[row])
-                continue;
-            for (int col = 0; col < WIDTH; col++)
-            {
-                SDL_Rect rect = transform_coords(col, row);
-                uint32_t passed = SDL_GetTicks() - start_animation;
-                int opacity = (500 - passed) / 255;
-                draw_rect(tetris->renderer, rect, (SDL_Color){0, 0, 0, opacity}, true);
-            }
-        }
-        SDL_RenderPresent(tetris->renderer);
-    }
+    // // Animate the row destruction. // Blocks game loop lol.
+    // uint32_t start_animation = SDL_GetTicks();
+    // while (SDL_GetTicks() < start_animation + 500)
+    // {
+    //     for (int row = 0; row < HEIGHT; row++)
+    //     {
+    //         if (!cleared_rows[row])
+    //             continue;
+    //         for (int col = 0; col < WIDTH; col++)
+    //         {
+    //             SDL_Rect rect = transform_coords(col, row);
+    //             uint32_t passed = SDL_GetTicks() - start_animation;
+    //             int opacity = (500 - passed) / 255;
+    //             draw_rect(tetris->renderer, rect, (SDL_Color){0, 0, 0, opacity}, true);
+    //         }
+    //     }
+    //     SDL_RenderPresent(tetris->renderer);
+    // }
 
     // Remove the rows
     for (int row = 0; row < HEIGHT; row++)
@@ -702,6 +708,27 @@ static void update_state(TETRIS_STATE *tetris)
     if (move_status == 3)
     {
         tetris->status = GAME_OVER;
+#ifdef MUSIC
+        Mix_HaltMusic();
+        Mix_PlayChannel(-1, tetris->over, 0);
+#endif
+        char *game_over = "Game over! Press enter to play again";
+        TTF_Font *big = TTF_OpenFontRW(SDL_RWFromConstMem(ssp_regular_otf, ssp_regular_otf_len),
+                                       1, SQUARE_DIM);
+        static SDL_Color c = {255, 255, 255, 255};
+        SDL_Surface *surface = TTF_RenderText_Solid(big, game_over, c);
+        TTF_CloseFont(big);
+        SDL_Rect pos = {
+            .x = WINDOW_WIDTH / 2 - (surface->w / 2),
+            .y = WINDOW_HEIGHT / 2,
+            .w = surface->w,
+            .h = surface->h,
+        };
+        SDL_RenderFillRect(tetris->renderer, &pos);
+        SDL_Texture *texture = SDL_CreateTextureFromSurface(tetris->renderer, surface);
+        SDL_FreeSurface(surface);
+        SDL_RenderCopy(tetris->renderer, texture, NULL, &pos);
+        SDL_DestroyTexture(texture);
         return;
     }
 
@@ -740,6 +767,19 @@ static void handle_events(TETRIS_STATE *tetris)
                 muted = !muted;
             }
 #endif
+            if (tetris->status == GAME_OVER)
+            {
+                switch (event.key.keysym.scancode)
+                {
+                case SDL_SCANCODE_RETURN:
+                    reset_tetris_state(tetris);
+                    tetris->status = PLAYING;
+                    break;
+                default:
+                    break;
+                }
+                break;
+            }
             if (tetris->status == PAUSED)
             {
                 switch (event.key.keysym.scancode)
@@ -771,11 +811,6 @@ static void handle_events(TETRIS_STATE *tetris)
             // Move down one unit (trigger a state update early)
             case SDL_SCANCODE_W:
             case SDL_SCANCODE_UP:
-                update_state(tetris);
-                break;
-            // Rotate
-            case SDL_SCANCODE_S:
-            case SDL_SCANCODE_DOWN:
                 if (tetris_get_time(tetris) <= tetris->last_rotate + ROTATION_DELAY)
                     break;
                 if (tetromino_move(tetris,
@@ -785,6 +820,11 @@ static void handle_events(TETRIS_STATE *tetris)
                     draw_board(tetris);
                     tetris->last_rotate = tetris_get_time(tetris);
                 }
+                break;
+            // Rotate
+            case SDL_SCANCODE_S:
+            case SDL_SCANCODE_DOWN:
+                update_state(tetris);
                 break;
             case SDL_SCANCODE_P:
             case SDL_SCANCODE_ESCAPE:
@@ -797,39 +837,6 @@ static void handle_events(TETRIS_STATE *tetris)
             break;
         }
     }
-}
-
-// GAME OVER WINDOW
-static bool game_over_window(TETRIS_STATE *tetris)
-{
-#ifdef MUSIC
-    Mix_PlayChannel(-1, tetris->over, 0);
-#endif
-    const SDL_MessageBoxButtonData buttons[] = {
-        {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 0, "Play Again"},
-        {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 1, "Quit"},
-    };
-    char score[38];
-    sprintf(score, "Level: %d\nScore: %.7d\nPlay again?", tetris->level,
-            tetris->score);
-    const SDL_MessageBoxData messageboxdata = {
-        SDL_MESSAGEBOX_INFORMATION, /* .flags */
-        tetris->window,             /* .window */
-        "Game Over",                /* .title */
-        score,                      /* .message */
-        SDL_arraysize(buttons),     /* .numbuttons */
-        buttons,                    /* .buttons */
-        NULL                        /* .colorScheme */
-    };
-    int buttonid;
-    SDL_ShowMessageBox(&messageboxdata, &buttonid);
-    if (buttonid == -1 || buttonid == 1)
-        return false;
-
-    if (buttonid == 0)
-        return true;
-
-    return false;
 }
 
 // INITIALIZATION FUNCTIONS
@@ -915,17 +922,6 @@ static void init_tetris_state(TETRIS_STATE *tetris)
     reset_tetris_state(tetris);
 }
 
-static void tetris_game_over(TETRIS_STATE *tetris)
-{
-#ifdef MUSIC
-    Mix_HaltMusic();
-#endif
-    if (game_over_window(tetris))
-        reset_tetris_state(tetris);
-    else
-        tetris->status = CLOSING;
-}
-
 static bool init_modules(void)
 {
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0)
@@ -951,6 +947,33 @@ static void quit_modules(void)
     SDL_Quit();
 }
 
+static void game_loop(void *data)
+{
+    TETRIS_STATE *tetris = data;
+    uint32_t this_frame = 0;
+    this_frame = tetris_get_time(tetris);
+    handle_events(tetris);
+    switch (tetris->status)
+    {
+    case PLAYING:
+        if (tetris->last_move + MOVE_DELAY - (int)(MOVE_DELAY * DIFFICULTY_RATIO * tetris->level) < this_frame)
+            update_state(tetris);
+        draw_ui(tetris);
+        break;
+    case PAUSED:
+        break;
+    case GAME_OVER:
+        break;
+    default:
+        break;
+    }
+    SDL_RenderPresent(tetris->renderer);
+    this_frame = tetris_get_time(tetris);
+    if (tetris->last_frame > this_frame - MAX_FPS)
+        SDL_Delay(tetris->last_frame + MAX_FPS - this_frame);
+    tetris->last_frame = tetris_get_time(tetris);
+}
+
 int main(int argc, char *argv[])
 {
     if (!init_modules())
@@ -969,32 +992,14 @@ int main(int argc, char *argv[])
     init_sound(&tetris);
 #endif
     init_tetris_state(&tetris);
-    uint32_t this_frame = 0;
+
+#ifdef WASM
+    emscripten_set_main_loop_arg(&game_loop, &tetris, -1, 1);
+#else
     while (tetris.status != CLOSING)
-    {
-        this_frame = tetris_get_time(&tetris);
-        handle_events(&tetris);
-        switch (tetris.status)
-        {
-        case PLAYING:
-            if (tetris.last_move + MOVE_DELAY - (int)(MOVE_DELAY * DIFFICULTY_RATIO * tetris.level) < this_frame)
-                update_state(&tetris);
-            break;
-        case PAUSED:
-            break;
-        case GAME_OVER:
-            tetris_game_over(&tetris);
-            break;
-        default:
-            break;
-        }
-        draw_ui(&tetris);
-        SDL_RenderPresent(tetris.renderer);
-        this_frame = tetris_get_time(&tetris);
-        if (tetris.last_frame > this_frame - MAX_FPS)
-            SDL_Delay(tetris.last_frame + MAX_FPS - this_frame);
-        tetris.last_frame = tetris_get_time(&tetris);
-    }
+        game_loop(&tetris);
+#endif
+
 #ifdef MUSIC
     free_sound(&tetris);
 #endif

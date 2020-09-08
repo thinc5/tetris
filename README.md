@@ -19,3 +19,7 @@ Ensuring that you have gcc and the SDL development tools installed, run the foll
 Don't forget to add .exe to the output if you're on windows!
 
 `gcc -O3 -Wall --std=c11 -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_mixer tetris.c font.h tiles.h -DMUSIC theme.h over.h fall.h clear.h level.h -o tetris`
+
+## WASM
+
+`emcc -s WASM=1 -s USE_SDL=2 -s USE_SDL_IMAGE=2 -s USE_SDL_TTF=2 -s SDL2_IMAGE_FORMATS='["png"]' -s USE_SDL_MIXER=2 -s SDL2_MIXER_FORMATS='["mp3"]' --shell-file template.html --std=c11 -DMUSIC tetris.c -o tetris.html`
