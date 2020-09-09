@@ -61,8 +61,8 @@
 
 // GAMEPLAY MODIFIERS
 #define MOVE_DELAY 1000
-#define MIN_MOVE_DELAY 50
-#define ROTATION_DELAY 150
+#define MIN_MOVE_DELAY 25
+#define ROTATION_DELAY 100
 #define DIFFICULTY_RATIO 0.1
 
 // STRUCTURE AND DATA DEFINITIONS
@@ -242,6 +242,7 @@ static void tetromino_create_bag(TETRIS_STATE *tetris)
 
 static int tetromino_has_space(TETRIS_STATE *tetris, ROTATION r, int x, int y)
 {
+    // Check next location.
     // Returns 1 for out of bounds, 2 for block placement and 3 for game over.
     for (int i = 0; i < TETROMINO_SIZE; i++)
     {
@@ -264,7 +265,7 @@ static int tetromino_has_space(TETRIS_STATE *tetris, ROTATION r, int x, int y)
             return 1;
 
         // Check if we have hit the bottom
-        if (real_y >= HEIGHT)
+        if (real_y == HEIGHT)
             return 2;
 
         // Off the screen, cannot be a game over
@@ -276,10 +277,9 @@ static int tetromino_has_space(TETRIS_STATE *tetris, ROTATION r, int x, int y)
         if (tetris->board[real_x + (real_y * WIDTH)] != '.')
         {
             // Block on top.
-            if (real_y <= 1)
+            if (real_y <= 0)
                 return 3;
 
-            // On top of another block, all good
             return 2;
         }
     }
@@ -330,6 +330,14 @@ static void tetromino_init(TETRIS_STATE *tetris)
     tetris->tetromino_x = (WIDTH / 2) - (TETROMINO_WIDTH / 2);
     tetris->tetromino_y = -TETROMINO_WIDTH;
     tetris->tetromino_rotation = DEG_0;
+    for (int i = 0; i < TETROMINO_WIDTH; i++)
+    {
+        if (tetromino_has_space(tetris, tetris->tetromino_rotation,
+                                tetris->tetromino_x,
+                                tetris->tetromino_y + 1) != 0)
+            break;
+        tetris->tetromino_y++;
+    }
 }
 
 static void tetromino_write(TETRIS_STATE *tetris)
@@ -361,6 +369,22 @@ static void tetromino_write(TETRIS_STATE *tetris)
     }
 }
 
+static int tetromino_drop_location(TETRIS_STATE *tetris)
+{
+    int y = tetris->tetromino_y;
+    int space = -1;
+    while (true)
+    {
+        int space = tetromino_has_space(tetris, tetris->tetromino_rotation,
+                                        tetris->tetromino_x, y + 1);
+        if (space == 2 || space == 3)
+            return y;
+
+        y++;
+    }
+    return -1;
+}
+
 // RENDER FUNCTIONS
 static SDL_Rect transform_coords(int x, int y)
 {
@@ -384,8 +408,7 @@ static void draw_rect(SDL_Renderer *renderer, SDL_Rect pos, SDL_Color colour,
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 }
 
-static void draw_tile(SDL_Renderer *renderer, SDL_Rect dst_rect,
-                      SDL_Texture *tex, char c)
+static void draw_tile(SDL_Renderer *renderer, SDL_Rect dst_rect, SDL_Texture *tex, char c)
 {
     int index = -1;
     switch (c)
@@ -421,6 +444,14 @@ static void draw_tile(SDL_Renderer *renderer, SDL_Rect dst_rect,
     SDL_RenderCopy(renderer, tex, &src_rect, &dst_rect);
 }
 
+static void draw_ghost_tile(TETRIS_STATE *tetris, int x, int y)
+{
+    SDL_Rect dst_rect = transform_coords(x, y);
+    SDL_SetRenderDrawColor(tetris->renderer, 255, 255, 255, 125);
+    SDL_RenderDrawRect(tetris->renderer, &dst_rect);
+    SDL_SetRenderDrawColor(tetris->renderer, 0, 0, 0, 255);
+}
+
 static void draw_tetromino_tile(TETRIS_STATE *tetris, char t, int x, int y)
 {
     SDL_Rect dst_rect = transform_coords(x, y);
@@ -444,8 +475,6 @@ static void draw_tetromino_preview_tile(TETRIS_STATE *tetris, TETROMINO t,
         char c = tetromino[t][i];
         draw_tile(tetris->renderer, dst_rect, tetris->tiles, c);
     }
-    start_rect.w = start_rect.w * TETROMINO_WIDTH;
-    start_rect.h = start_rect.h * TETROMINO_WIDTH;
 }
 
 static void draw_font(SDL_Renderer *renderer, TTF_Font *font, int x, int y,
@@ -649,6 +678,7 @@ static void draw_placed(TETRIS_STATE *tetris)
 
 static void draw_piece(TETRIS_STATE *tetris)
 {
+    int drop_y = tetromino_drop_location(tetris);
     // Draw falling piece
     for (int i = 0; i < TETROMINO_SIZE; i++)
     {
@@ -665,12 +695,16 @@ static void draw_piece(TETRIS_STATE *tetris)
         sub_x = rotatedIndex % TETROMINO_WIDTH;
         sub_y = rotatedIndex / TETROMINO_WIDTH;
 
-        if (tetris->tetromino_y + sub_y < 0)
-            continue;
-
-        draw_tetromino_tile(tetris, tetromino[tetris->tetromino_type][i],
+        // No rendering when we overlap.
+        if (drop_y + sub_y >= 0 && drop_y + sub_y != tetris->tetromino_y + sub_y)
+            draw_ghost_tile(tetris,
                             tetris->tetromino_x + sub_x,
-                            tetris->tetromino_y + sub_y);
+                            drop_y + sub_y);
+
+        if (tetris->tetromino_y + sub_y >= 0)
+            draw_tetromino_tile(tetris, tetromino[tetris->tetromino_type][i],
+                                tetris->tetromino_x + sub_x,
+                                tetris->tetromino_y + sub_y);
     }
 }
 
@@ -688,10 +722,12 @@ static void draw_board(TETRIS_STATE *tetris)
 }
 
 // CORE LOOP FUNCTIONS
+
 static void update_state(TETRIS_STATE *tetris)
 {
     // Are we writing the tetromino and creating a new one?
-    if (tetris->last_move + MIN_MOVE_DELAY >= tetris_get_time(tetris))
+    if (tetris->last_move + MIN_MOVE_DELAY >= tetris_get_time(tetris) &&
+        tetris->tetromino_y < 0)
         return;
 
     tetris->last_move = tetris_get_time(tetris);
@@ -740,6 +776,27 @@ static void update_state(TETRIS_STATE *tetris)
 
     // Update the move timer.
     tetris->tetromino_y++;
+    draw_board(tetris);
+}
+
+static void fast_drop(TETRIS_STATE *tetris)
+{
+    if (tetris->last_move + MIN_MOVE_DELAY >= tetris_get_time(tetris))
+        return;
+    int drop_y = tetromino_drop_location(tetris);
+
+    if (drop_y == -1)
+        return;
+
+    tetris->tetromino_y = drop_y;
+    tetris->last_move = tetris_get_time(tetris);
+#ifdef MUSIC
+    Mix_PlayChannel(-1, tetris->place, 0);
+#endif
+    tetromino_write(tetris);
+    tetromino_clear_row(tetris);
+    tetromino_init(tetris);
+    draw_bag(tetris);
     draw_board(tetris);
 }
 
@@ -832,10 +889,14 @@ static void handle_events(TETRIS_STATE *tetris)
             case SDL_SCANCODE_DOWN:
                 update_state(tetris);
                 break;
+            // Pause
             case SDL_SCANCODE_P:
             case SDL_SCANCODE_ESCAPE:
                 tetris_pause(tetris);
                 break;
+            // Fast drop
+            case SDL_SCANCODE_SPACE:
+                fast_drop(tetris);
             default:
                 break;
             }
@@ -962,9 +1023,6 @@ static void game_loop(void *data)
     switch (tetris->status)
     {
     case PLAYING:
-        while (tetris->tetromino_y < 0 && tetris->status != GAME_OVER)
-            update_state(tetris);
-
         if (tetris->last_move + MOVE_DELAY -
                 (int)(MOVE_DELAY * (DIFFICULTY_RATIO * tetris->level)) <
             this_frame)
