@@ -2,6 +2,8 @@
 
 Quick imperative implementation of Tetris in C using SDL2.
 
+Play a recent version in the browser here: [tetris](https://tetris.thinc5.xyz/)
+
 ## Compilation
 
 First get a font you like such as the included ssp-regular in the otf/ttf format.
