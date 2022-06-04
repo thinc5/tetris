@@ -3,7 +3,8 @@ CFLAGS 			:= -std=c11 -Wall -pedantic
 LINKER  		:= gcc
 LFLAGS			:= -lSDL2 -lSDL2_image -lSDL2_ttf 
 XXD				:= xxd
-FORMATTER		:= clang-format
+FORMATTER		:= uncrustify
+FORMAT_CONFIG	:= clean.cfg
 
 RESDIR			:= res
 INCDIR			:= .
@@ -51,6 +52,8 @@ endif
 
 default: build
 
+all: build
+
 $(OUTDIR):
 	@$(MKDIR) $(OUTDIR)
 
@@ -62,15 +65,15 @@ $(OUTDIR)/$(TARGET): $(SOURCES) $(HEADERS) $(RESOURCES) $(OUTDIR)
 
 build: $(OUTDIR)/$(TARGET)
 
-.PHONY:	clean format
+.PHONY:	clean format $(FORMAT_TARGETS)
 
 $(FORMAT_TARGETS):
 	$(info Formatting: $@)
-	$(shell clang-format $@ > $@.temp)
-	$(shell mv $@.temp $@)
+	$(FORMATTER) -c $(FORMAT_CONFIG) -f $@ -o $@
 
 format: $(FORMAT_TARGETS)
 
 clean:
 	@$(RM) $(RESOURCES)
 	@$(RM) $(OUTDIR)
+	@$(RM) *.unc*
