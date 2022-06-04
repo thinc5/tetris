@@ -2,26 +2,25 @@
 
 Quick imperative implementation of Tetris in C using SDL2.
 
-Play a recent version in the browser here: [tetris](https://tetris.thinc5.xyz/)
+## Dependencies
+
+SDL2, SDL_Image (2), SDL_TTF (2) are all required, but SDL_Mixer (2) is only required if you want sound. Consult your operating system's package manager or google in order to find out where you can download the development libraries for these dependencies.
+
+If you wish to compile to Webassembly, emscripten is required.
+
+The provided Makefile makes reference to some resources that are not present, and as such you will need to source on your own. You will need to provide an `.otf` font in `res/` and name it `font.otf`. This is the only required file that is not included in this repository.
+
+If you want music and sound effects, you must provide the files referenced in the Makefile and use the flag described below.
 
 ## Compilation
 
-First get a font you like such as the included ssp-regular in the otf/ttf format.
+This project uses a Makefile.
 
-Run the following commands after ensuring you have access to the `xxd` tool or an analogue.
+An example build command targeting `wasm` and enabling music: `make MUSIC=1 PLATFORM=wasm`
 
-`xxd -i tiles.png > tiles.h`
+This does a few things, it will take your provided font, tile image and other resources and convert them into header files, which are then included in the emitted executable.
 
-`xdd -i ssp-regular.otf > font.h`
+To compile with debug info, use `make DEBUG=1`, to compile with music provided you have supplied the expected files in `res/` use `make MUSIC=1`
 
-Ensuring that you have gcc and the SDL development tools installed, run the following command to compile the tetris executable.
+To compile for other targets such as `wasm` or `win32` use `make PLATFORM=wasm` etc.
 
-`gcc -O3 -Wall --std=c11 -lSDL2 -lSDL2_ttf -lSDL2_image tetris.c font.h tiles.h -o tetris`
-
-Don't forget to add .exe to the output if you're on windows!
-
-`gcc -O3 -Wall --std=c11 -lSDL2 -lSDL2_ttf -lSDL2_image -lSDL2_mixer tetris.c font.h tiles.h -DMUSIC theme.h over.h fall.h clear.h level.h -o tetris`
-
-## WASM
-
-`emcc -s WASM=1 -s USE_SDL=2 -s USE_SDL_IMAGE=2 -s USE_SDL_TTF=2 -s SDL2_IMAGE_FORMATS='["png"]' -s USE_SDL_MIXER=2 -s SDL2_MIXER_FORMATS='["mp3"]' --shell-file template.html --std=c11 -DMUSIC tetris.c -o tetris.html`

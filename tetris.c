@@ -1,6 +1,6 @@
-#include <SDL2/SDL.h>
-#include <SDL2/SDL_image.h>
-#include <SDL2/SDL_ttf.h>
+#ifdef WASM
+#include <emscripten/emscripten.h>
+#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -8,13 +8,16 @@
 #include <unistd.h>
 #include <stdbool.h>
 #include <time.h>
+#include <math.h>
 
-// Visual assets.
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_image.h>
+#include <SDL2/SDL_ttf.h>
+
 #include "font.h"
 #include "tiles.h"
 
 #ifdef MUSIC
-// If we enable music import the assets.
 #include <SDL2/SDL_mixer.h>
 #include "theme.h"
 #include "clear.h"
@@ -25,28 +28,24 @@
 #define VOLUME_DEFAULT (MIX_MAX_VOLUME / 8)
 #endif
 
-#ifdef WASM
-#include <emscripten/emscripten.h>
-#endif
-
-// PLAY GRID DIMENSIONS
-#define WIDTH 10
-#define HEIGHT 20
-
-// Add space for boarder and UI
-#define LEFT_OFFSET 5
-#define RIGHT_OFFSET 1
-// Account for top and bottom border
-#define TOP_OFFSET 1
-#define BOTTOM_OFFSET 1
-// UI Horizontal offset
-#define UI_OFFSET 3
-
 // DISPLAY SETTINGS
 #define WINDOW_TITLE "Tetris"
 #define DESIRED_HEIGHT 720
 
 #define MAX_FPS (1000 / 144)
+
+
+// PLAY GRID DIMENSIONS
+#define WIDTH 10
+#define HEIGHT 20
+
+// ADD SPACE FOR BOARDER AND UI
+#define LEFT_OFFSET 5
+#define RIGHT_OFFSET 1
+#define TOP_OFFSET 1
+#define BOTTOM_OFFSET 1
+// HORIZONTAL OFFSET
+#define UI_OFFSET 3
 
 // LOGICAL SIZE OF A TETRIS SQUARE
 #define SQUARE_DIM (DESIRED_HEIGHT / (HEIGHT + TOP_OFFSET + BOTTOM_OFFSET))
@@ -375,8 +374,8 @@ static int tetromino_drop_location(TETRIS_STATE *tetris)
     int space = -1;
     while (true)
     {
-        int space = tetromino_has_space(tetris, tetris->tetromino_rotation,
-                                        tetris->tetromino_x, y + 1);
+        space = tetromino_has_space(tetris, tetris->tetromino_rotation,
+                                    tetris->tetromino_x, y + 1);
         if (space == 2 || space == 3)
             return y;
 
@@ -394,18 +393,6 @@ static SDL_Rect transform_coords(int x, int y)
         .w = SQUARE_DIM,
         .h = SQUARE_DIM,
     };
-}
-
-static void draw_rect(SDL_Renderer *renderer, SDL_Rect pos, SDL_Color colour,
-                      bool fill)
-{
-    SDL_SetRenderDrawColor(renderer, colour.r, colour.g, colour.b, colour.a);
-    if (fill)
-        SDL_RenderFillRect(renderer, &pos);
-    else
-        SDL_RenderDrawRect(renderer, &pos);
-
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
 }
 
 static void draw_tile(SDL_Renderer *renderer, SDL_Rect dst_rect, SDL_Texture *tex, char c)
@@ -755,7 +742,7 @@ static void update_state(TETRIS_STATE *tetris)
         Mix_PlayChannel(-1, tetris->over, 0);
 #endif
         char *game_over = "Game over! Press enter to play again";
-        TTF_Font *big = TTF_OpenFontRW(SDL_RWFromConstMem(ssp_regular_otf, ssp_regular_otf_len),
+        TTF_Font *big = TTF_OpenFontRW(SDL_RWFromConstMem(res_font_otf, res_font_otf_len),
                                        1, SQUARE_DIM);
         static SDL_Color c = {255, 255, 255, 255};
         SDL_Surface *surface = TTF_RenderText_Solid(big, game_over, c);
@@ -919,10 +906,10 @@ static void init_rendering(TETRIS_STATE *tetris)
     SDL_RenderSetLogicalSize(tetris->renderer, WINDOW_WIDTH, WINDOW_HEIGHT);
     SDL_SetRenderDrawBlendMode(tetris->renderer, SDL_BLENDMODE_BLEND);
     tetris->font =
-        TTF_OpenFontRW(SDL_RWFromConstMem(ssp_regular_otf, ssp_regular_otf_len),
+        TTF_OpenFontRW(SDL_RWFromConstMem(res_font_otf, res_font_otf_len),
                        1, (WINDOW_HEIGHT / SQUARE_DIM) * 0.75);
     tetris->tiles = IMG_LoadTexture_RW(tetris->renderer,
-                                       SDL_RWFromConstMem(tiles_png, tiles_png_len), 0);
+                                       SDL_RWFromConstMem(res_tiles_png, res_tiles_png_len), 0);
 }
 
 static void free_rendering(TETRIS_STATE *tetris)
@@ -938,11 +925,11 @@ static void init_sound(TETRIS_STATE *tetris)
 {
     Mix_VolumeMusic(VOLUME_DEFAULT);
     Mix_Volume(-1, VOLUME_DEFAULT * 1.5);
-    tetris->theme = Mix_LoadMUS_RW(SDL_RWFromConstMem(theme_mp3, theme_mp3_len), -1);
-    tetris->place = Mix_LoadWAV_RW(SDL_RWFromConstMem(fall_wav, fall_wav_len), -1);
-    tetris->clear = Mix_LoadWAV_RW(SDL_RWFromConstMem(clear_wav, clear_wav_len), -1);
-    tetris->over = Mix_LoadWAV_RW(SDL_RWFromConstMem(over_wav, over_wav_len), -1);
-    tetris->level_up = Mix_LoadWAV_RW(SDL_RWFromConstMem(level_wav, level_wav_len), -1);
+    tetris->theme = Mix_LoadMUS_RW(SDL_RWFromConstMem(res_theme_mp3, res_theme_mp3_len), -1);
+    tetris->place = Mix_LoadWAV_RW(SDL_RWFromConstMem(res_fall_wav, res_fall_wav_len), -1);
+    tetris->clear = Mix_LoadWAV_RW(SDL_RWFromConstMem(res_clear_wav, res_clear_wav_len), -1);
+    tetris->over = Mix_LoadWAV_RW(SDL_RWFromConstMem(res_over_wav, res_over_wav_len), -1);
+    tetris->level_up = Mix_LoadWAV_RW(SDL_RWFromConstMem(res_level_wav, res_level_wav_len), -1);
 }
 
 static void free_sound(TETRIS_STATE *tetris)
