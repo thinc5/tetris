@@ -60,15 +60,14 @@ $(OUTDIR):
 $(INCDIR)/%.h : $(RESDIR)/%.*
 	$(shell $(XXD) -i $< > $@)
 
-$(OUTDIR)/$(TARGET): $(SOURCES) $(HEADERS) $(RESOURCES) $(OUTDIR) 
-	$(CC) $(CFLAGS) $(LFLAGS) $(SOURCES) -o $@
+$(OUTDIR)/$(TARGET): $(SOURCES) $(HEADERS) $(RESOURCES) $(OUTDIR)
+	$(CC) $(SOURCES) $(CFLAGS) $(LFLAGS) -o $@
 
 build: $(OUTDIR)/$(TARGET)
 
 .PHONY:	clean format $(FORMAT_TARGETS)
 
 $(FORMAT_TARGETS):
-	$(info Formatting: $@)
 	$(FORMATTER) -c $(FORMAT_CONFIG) -f $@ -o $@
 
 format: $(FORMAT_TARGETS)
