@@ -631,10 +631,7 @@ static void draw_placed(TETRIS_STATE *tetris)
 {
 	// Draw board state
 	for (int i = 0; i < (WIDTH * HEIGHT) * 2; i++) {
-		int x = (i % WIDTH);
-		// Uh why?
-		int y = (i / (HEIGHT / 2));
-		draw_tetromino_tile(tetris, tetris->board[i], x, y);
+		draw_tetromino_tile(tetris, tetris->board[i], (i % WIDTH), (i / (HEIGHT / 2)));
 	}
 }
 
@@ -966,6 +963,9 @@ static void game_loop(void *data)
 {
 	TETRIS_STATE *tetris = data;
 	uint32_t this_frame = tetris_get_time(tetris);
+	draw_border(tetris);
+	draw_board(tetris);
+	draw_ui(tetris);
 	handle_events(tetris);
 	switch (tetris->status) {
 	case PLAYING:
